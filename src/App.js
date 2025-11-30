@@ -349,7 +349,12 @@ const App = () => {
       console.log("ZeroGPT Response:", data);
 
       // Adjust based on actual response structure.
-      const score = data.fakePercentage ?? data.ai_score ?? data.score ?? (data.data && data.data.fakePercentage) ?? null;
+      let score = data.data?.fakePercentage ?? data.fakePercentage ?? null;
+
+      // Fallback to isHuman if fakePercentage is 0 or missing
+      if ((score === 0 || score === null) && data.data?.isHuman !== undefined) {
+        score = 100 - data.data.isHuman;
+      }
 
       if (score === null) {
         console.warn("Could not find score in response:", data);
@@ -380,17 +385,37 @@ const App = () => {
     setIsTesting(true);
     setTestProgress(0);
 
-    const candidates = [
-      ['Zero Width Space'],
-      ['Thin Space'],
-      ['Hair Space'],
-      ['Zero Width Space', 'Thin Space'],
-      ['Zero Width Space', 'Hair Space'],
-      ['Thin Space', 'Hair Space'],
-      ['Zero Width Space', 'Thin Space', 'Hair Space'],
-      ['Zero Width Space', 'Word Joiner'],
-      ['Thin Space', 'Word Joiner']
-    ];
+    // Generate random combinations from all available Unicode spaces
+    const allSpaceKeys = Object.keys(unicodeSpaces);
+    const numCombinationsToTest = 20; // Test 20 random combinations
+    const candidates = [];
+
+    // Helper function to generate a random combination (max 3 spaces)
+    const generateRandomCombination = () => {
+      const numSpaces = Math.floor(Math.random() * 3) + 1; // 1-3 spaces per combination
+      const combination = [];
+      const availableKeys = [...allSpaceKeys];
+
+      for (let i = 0; i < numSpaces; i++) {
+        const randomIndex = Math.floor(Math.random() * availableKeys.length);
+        combination.push(availableKeys[randomIndex]);
+        availableKeys.splice(randomIndex, 1); // Remove to avoid duplicates in same combo
+      }
+
+      return combination;
+    };
+
+    // Generate unique random combinations
+    const seenCombinations = new Set();
+    while (candidates.length < numCombinationsToTest) {
+      const combo = generateRandomCombination();
+      const comboKey = combo.sort().join('|'); // Sort to detect duplicates
+
+      if (!seenCombinations.has(comboKey)) {
+        seenCombinations.add(comboKey);
+        candidates.push(combo);
+      }
+    }
 
     let bestScore = 101; // Start higher than max possible score (100)
     let bestCombo = candidates[0]; // Default fallback
