@@ -1,11 +1,12 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   TextField, Container, Typography, Box, Grid, AppBar, Toolbar,
   CssBaseline, Button, Card, CardContent, IconButton, Snackbar,
-  useMediaQuery, Tooltip, Fade, Select, MenuItem, Chip, ToggleButton, ToggleButtonGroup
+  useMediaQuery, Tooltip, Fade, Select, MenuItem, Chip, ToggleButton, ToggleButtonGroup,
+  CircularProgress, LinearProgress, Dialog, DialogTitle, DialogContent, DialogActions
 } from '@mui/material';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
-import { FileCopy as FileCopyIcon, Clear as ClearIcon, DarkMode, LightMode, Add as AddIcon, TextFields, FormatColorText } from '@mui/icons-material';
+import { FileCopy as FileCopyIcon, Clear as ClearIcon, DarkMode, LightMode, Add as AddIcon, TextFields, FormatColorText, Settings as SettingsIcon } from '@mui/icons-material';
 import { FaGithub } from 'react-icons/fa';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
@@ -16,9 +17,9 @@ const Font = ReactQuill.Quill.import('formats/font');
 Font.whitelist = [
   // Basic web fonts
   'sans-serif',
-  'serif', 
+  'serif',
   'monospace',
-  
+
   // Web Safe Fonts
   'arial',
   'arial-black',
@@ -37,7 +38,7 @@ Font.whitelist = [
   'times-new-roman',
   'trebuchet-ms',
   'verdana',
-  
+
   // System Fonts
   'calibri',
   'cambria',
@@ -53,7 +54,7 @@ Font.whitelist = [
   'futura',
   'avenir',
   'proxima-nova',
-  
+
   // Google Fonts
   'open-sans',
   'roboto',
@@ -80,7 +81,7 @@ Font.whitelist = [
   'bitter',
   'droid-sans',
   'droid-serif',
-  
+
   // Classic Typography
   'garamond',
   'baskerville',
@@ -94,7 +95,7 @@ Font.whitelist = [
   'copperplate',
   'trajan',
   'optima',
-  
+
   // Monospace Fonts
   'monaco',
   'menlo',
@@ -148,6 +149,15 @@ const App = () => {
   const [mode, setMode] = useState(prefersDarkMode ? 'dark' : 'light');
   const [customSpaces, setCustomSpaces] = useState([]);
   const [selectedSpace, setSelectedSpace] = useState('');
+  const [apiKey, setApiKey] = useState(localStorage.getItem('zerogpt_api_key') || 'c9cbf0ef-c07e-49ce-baa2-c4ee1d030c3e');
+  const [isTesting, setIsTesting] = useState(false);
+  const [testProgress, setTestProgress] = useState(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // Save API key to local storage whenever it changes
+  useEffect(() => {
+    localStorage.setItem('zerogpt_api_key', apiKey);
+  }, [apiKey]);
 
   const theme = useMemo(
     () =>
@@ -197,7 +207,7 @@ const App = () => {
           MuiCard: {
             styleOverrides: {
               root: {
-                boxShadow: mode === 'light' 
+                boxShadow: mode === 'light'
                   ? '0 2px 4px rgba(0, 0, 0, 0.1)'
                   : '0 2px 4px rgba(255, 255, 255, 0.05)',
                 borderRadius: '8px',
@@ -258,7 +268,7 @@ const App = () => {
   const replaceSpacesInHtml = useCallback((html, unicodeCharacter) => {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
-    
+
     const walkTextNodes = (node) => {
       if (node.nodeType === Node.TEXT_NODE) {
         node.textContent = replaceSpaces(node.textContent, unicodeCharacter);
@@ -268,7 +278,7 @@ const App = () => {
         }
       }
     };
-    
+
     walkTextNodes(doc.body);
     return doc.body.innerHTML;
   }, [replaceSpaces]);
@@ -320,6 +330,106 @@ const App = () => {
     setCustomSpaces(customSpaces.filter(s => s !== space));
   };
 
+  const checkZeroGPT = async (text, key) => {
+    try {
+      const response = await fetch('/api/detect/detectText', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'ApiKey': key
+        },
+        body: JSON.stringify({ input_text: text })
+      });
+
+      if (!response.ok) {
+        throw new Error(`API Error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log("ZeroGPT Response:", data);
+
+      // Adjust based on actual response structure.
+      const score = data.fakePercentage ?? data.ai_score ?? data.score ?? (data.data && data.data.fakePercentage) ?? null;
+
+      if (score === null) {
+        console.warn("Could not find score in response:", data);
+        return null;
+      }
+
+      return typeof score === 'number' ? score : parseFloat(score);
+    } catch (error) {
+      console.error("ZeroGPT Check Failed:", error);
+      return null; // Return null to indicate failure
+    }
+  };
+
+  const handleAutoSelect = async () => {
+    if (!apiKey) {
+      setSettingsOpen(true);
+      setSnackbarMessage('Please enter your ZeroGPT API Key first.');
+      setSnackbarOpen(true);
+      return;
+    }
+
+    if (!inputText) {
+      setSnackbarMessage('Please enter some text to test.');
+      setSnackbarOpen(true);
+      return;
+    }
+
+    setIsTesting(true);
+    setTestProgress(0);
+
+    const candidates = [
+      ['Zero Width Space'],
+      ['Thin Space'],
+      ['Hair Space'],
+      ['Zero Width Space', 'Thin Space'],
+      ['Zero Width Space', 'Hair Space'],
+      ['Thin Space', 'Hair Space'],
+      ['Zero Width Space', 'Thin Space', 'Hair Space'],
+      ['Zero Width Space', 'Word Joiner'],
+      ['Thin Space', 'Word Joiner']
+    ];
+
+    let bestScore = 101; // Start higher than max possible score (100)
+    let bestCombo = candidates[0]; // Default fallback
+
+    for (let i = 0; i < candidates.length; i++) {
+      const combo = candidates[i];
+
+      // Construct the text with this combination
+      const customSpacingStr = combo.map(space => unicodeSpaces[space]).join('');
+      const testText = replaceSpaces(inputText, customSpacingStr);
+
+      // Call API
+      const score = await checkZeroGPT(testText, apiKey);
+
+      // Update progress
+      setTestProgress(Math.round(((i + 1) / candidates.length) * 100));
+
+      if (score !== null) {
+        console.log(`Combination: ${combo.join(' + ')}, Score: ${score}`);
+        if (score < bestScore) {
+          bestScore = score;
+          bestCombo = combo;
+        }
+      } else {
+        // If API fails, we might want to stop or continue. For now, we continue.
+        console.warn(`Failed to check combination: ${combo.join(' + ')}`);
+      }
+
+      // Add a small delay to avoid rate limits if necessary
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    setCustomSpaces(bestCombo);
+    setSelectedSpace('');
+    setIsTesting(false);
+    setSnackbarMessage(`Auto-selected best combination! (Lowest AI Score: ${bestScore === 101 ? 'N/A' : bestScore}%)`);
+    setSnackbarOpen(true);
+  };
+
   const getCustomSpacingText = useCallback(() => {
     const customSpacing = customSpaces.map(space => unicodeSpaces[space]).join('');
     return replaceSpaces(inputText, customSpacing);
@@ -338,6 +448,15 @@ const App = () => {
           <Typography variant="h6" color="inherit" sx={{ flexGrow: 1, fontWeight: 700 }}>
             Zero-ZeroGPT
           </Typography>
+          <Tooltip title="Settings">
+            <IconButton
+              color="inherit"
+              onClick={() => setSettingsOpen(true)}
+              sx={{ mr: 1 }}
+            >
+              <SettingsIcon />
+            </IconButton>
+          </Tooltip>
           <Tooltip title="View on GitHub">
             <IconButton
               color="inherit"
@@ -366,7 +485,7 @@ const App = () => {
           <Typography variant="body1" align="center" paragraph>
             Enter text to experiment with the impact of unicode space types on AI detection tools.
           </Typography>
-          
+
           <Box display="flex" justifyContent="center" mb={2}>
             <ToggleButtonGroup
               value={inputMode}
@@ -397,10 +516,10 @@ const App = () => {
               margin="dense"
               placeholder="Enter your text here..."
               sx={{
-                width:"90%",
+                width: "90%",
                 mx: "5%",
                 borderRadius: '6px',
-               '& .MuiOutlinedInput-root': {
+                '& .MuiOutlinedInput-root': {
                   backgroundColor: theme.palette.background.paper,
                 },
               }}
@@ -418,30 +537,32 @@ const App = () => {
                 modules={{
                   toolbar: [
                     [{ 'header': [1, 2, 3, false] }],
-                    [{ 'font': [
-                      'sans-serif', 'serif', 'monospace',
-                      'arial', 'arial-black', 'arial-narrow', 'comic-sans', 'courier', 'courier-new', 
-                      'georgia', 'helvetica', 'impact', 'lucida-console', 'lucida-sans', 'palatino', 
-                      'tahoma', 'times', 'times-new-roman', 'trebuchet-ms', 'verdana',
-                      'calibri', 'cambria', 'consolas', 'franklin-gothic', 'segoe-ui', 'system-ui', 
-                      'microsoft-sans-serif', 'book-antiqua', 'century-gothic', 'lucida-grande', 
-                      'optima', 'futura', 'avenir', 'proxima-nova',
-                      'open-sans', 'roboto', 'lato', 'montserrat', 'source-sans-pro', 'raleway', 
-                      'pt-sans', 'ubuntu', 'nunito', 'poppins', 'oswald', 'merriweather', 
-                      'playfair-display', 'roboto-slab', 'lora', 'fira-sans', 'noto-sans', 
-                      'roboto-condensed', 'source-serif-pro', 'crimson-text', 'pt-serif', 
-                      'libre-baskerville', 'bitter', 'droid-sans', 'droid-serif',
-                      'garamond', 'baskerville', 'caslon', 'gill-sans', 'minion-pro', 'myriad-pro', 
-                      'adobe-garamond', 'bookman', 'avant-garde', 'copperplate', 'trajan',
-                      'monaco', 'menlo', 'inconsolata', 'source-code-pro', 'fira-code', 
-                      'dejavu-sans-mono', 'liberation-mono', 'anonymous-pro', 'courier-prime'
-                    ] }],
+                    [{
+                      'font': [
+                        'sans-serif', 'serif', 'monospace',
+                        'arial', 'arial-black', 'arial-narrow', 'comic-sans', 'courier', 'courier-new',
+                        'georgia', 'helvetica', 'impact', 'lucida-console', 'lucida-sans', 'palatino',
+                        'tahoma', 'times', 'times-new-roman', 'trebuchet-ms', 'verdana',
+                        'calibri', 'cambria', 'consolas', 'franklin-gothic', 'segoe-ui', 'system-ui',
+                        'microsoft-sans-serif', 'book-antiqua', 'century-gothic', 'lucida-grande',
+                        'optima', 'futura', 'avenir', 'proxima-nova',
+                        'open-sans', 'roboto', 'lato', 'montserrat', 'source-sans-pro', 'raleway',
+                        'pt-sans', 'ubuntu', 'nunito', 'poppins', 'oswald', 'merriweather',
+                        'playfair-display', 'roboto-slab', 'lora', 'fira-sans', 'noto-sans',
+                        'roboto-condensed', 'source-serif-pro', 'crimson-text', 'pt-serif',
+                        'libre-baskerville', 'bitter', 'droid-sans', 'droid-serif',
+                        'garamond', 'baskerville', 'caslon', 'gill-sans', 'minion-pro', 'myriad-pro',
+                        'adobe-garamond', 'bookman', 'avant-garde', 'copperplate', 'trajan',
+                        'monaco', 'menlo', 'inconsolata', 'source-code-pro', 'fira-code',
+                        'dejavu-sans-mono', 'liberation-mono', 'anonymous-pro', 'courier-prime'
+                      ]
+                    }],
                     [{ 'size': ['small', false, 'large', 'huge'] }],
                     ['bold', 'italic', 'underline', 'strike'],
                     [{ 'color': [] }, { 'background': [] }],
                     [{ 'align': [] }],
-                    [{ 'list': 'ordered'}, { 'list': 'bullet' }],
-                    [{ 'indent': '-1'}, { 'indent': '+1' }],
+                    [{ 'list': 'ordered' }, { 'list': 'bullet' }],
+                    [{ 'indent': '-1' }, { 'indent': '+1' }],
                     ['blockquote', 'code-block'],
                     ['link', 'image'],
                     ['clean']
@@ -567,10 +688,28 @@ const App = () => {
                   color="primary"
                   onClick={handleAddCustomSpace}
                   startIcon={<AddIcon />}
+                  sx={{ mr: 1 }}
                 >
                   Add
                 </Button>
+                <Button
+                  variant="contained"
+                  color="secondary"
+                  onClick={handleAutoSelect}
+                  disabled={isTesting}
+                  startIcon={isTesting ? <CircularProgress size={20} color="inherit" /> : <AddIcon />}
+                >
+                  {isTesting ? 'Testing...' : 'Auto Select'}
+                </Button>
               </Box>
+              {isTesting && (
+                <Box sx={{ width: '100%', mb: 2 }}>
+                  <LinearProgress variant="determinate" value={testProgress} />
+                  <Typography variant="caption" color="textSecondary" align="center" display="block">
+                    Testing combinations... {testProgress}%
+                  </Typography>
+                </Box>
+              )}
               <Box display="flex" flexWrap="wrap" gap={1} mb={2}>
                 {customSpaces.map((space) => (
                   <Chip
@@ -639,6 +778,32 @@ const App = () => {
           </Card>
         </Box>
       </Container>
+
+      {/* Settings Dialog */}
+      <Dialog open={settingsOpen} onClose={() => setSettingsOpen(false)}>
+        <DialogTitle>Settings</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" gutterBottom>
+            Enter your ZeroGPT API Key to enable dynamic auto-selection.
+          </Typography>
+          <TextField
+            autoFocus
+            margin="dense"
+            id="apiKey"
+            label="ZeroGPT API Key"
+            type="password"
+            fullWidth
+            variant="outlined"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSettingsOpen(false)}>Cancel</Button>
+          <Button onClick={() => setSettingsOpen(false)} variant="contained">Save</Button>
+        </DialogActions>
+      </Dialog>
+
       <Snackbar
         anchorOrigin={{
           vertical: 'bottom',
